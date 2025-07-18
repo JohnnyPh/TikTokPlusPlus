@@ -1,57 +1,46 @@
-name: Build and Release BHTikTokPlus
+name: Build BHTikTok++ IPA and Upload to Appdb
 
 on:
   workflow_dispatch:
     inputs:
-      sdk_version:
-        description: "iOS SDK Version"
-        default: "17.5"
+      ipa_url:
+        description: "URL to the decrypted TikTok IPA file"
+        default: "https://www.dropbox.com/scl/fi/nqk5nnbdbovugqex1lep8/com.ss.iphone.ugc.Ame_40.7.0_und3fined.ipa?rlkey=jbwoeds3nf1dk5i1mdz8f8ce9&st=yw6drktz&dl=1"
         required: true
         type: string
-      BHTikTokPlusPlus_version:
-        description: "BHTikTokPlusPlus Version"
-        default: "1.9.3"
-        required: true
-        type: string
-      decrypted_TikTok_url:
-        description: "The direct URL to the decrypted TikTok ipa"
-        default: ""
-        required: true
-        type: string
-      bundle_id:
-        description: "Modify the bundle ID. Not recommended"
-        default: "com.ss.iphone.ugc.Ame"
-        required: true
-        type: string
-      app_name:
-        description: "Modify the name of the app on the Home Screen. Not recommended"
+
+      display_name:
+        description: "App Name (Optional)"
         default: "TikTok"
         required: true
         type: string
-      commit_id:
-        description: "(Optional) Commit ID to build at"
-        default: ""
-        required: false
+
+      bundle_id:
+        description: "BundleID (Optional)"
+        default: "com.ss.iphone.ugc.Ame"
+        required: true
         type: string
-      upload_artifact:
-        description: "Upload IPA as artifact"
-        default: false
-        required: false
-        type: boolean
-      create_release:
-        description: "Create a draft release"
+
+      upload_to_appdb:
+        description: "Upload and Edit Metadata on appdb"
         default: true
         required: false
         type: boolean
-  
+
+      cleanup_old_versions:
+        description: "Delete older versions of this app from appdb"
+        default: true
+        required: false
+        type: boolean
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
-    name: Build BHTikTokPlusPlus
-    runs-on: macos-13
+    name: Build BHTikTok++
+    runs-on: macos-latest
     permissions:
       contents: write
 
@@ -60,118 +49,165 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: main
-          ref: ${{ github.event.inputs.commit_id || github.ref }}
           submodules: recursive
 
+      - name: Hide sensitive inputs
+        uses: levibostian/action-hide-sensitive-inputs@v1
+        with:
+          exclude_inputs: display_name,bundle_id
+
+      - name: Download and validate IPA
+        run: |
+          wget "${{ inputs.ipa_url }}" --no-verbose -O ${{ github.workspace }}/tiktok.ipa
+          file_type=$(file --mime-type -b ${{ github.workspace }}/tiktok.ipa)
+          if [[ "$file_type" != "application/x-ios-app" && "$file_type" != "application/zip" ]]; then
+            echo "::error::Validation failed: The downloaded file is not a valid IPA. Detected type: $file_type."
+            exit 1
+          fi
+
       - name: Install Dependencies
-        run: brew install make dpkg ldid
+        run: brew install make ldid jq
 
       - name: Set PATH environment variable
         run: echo "$(brew --prefix make)/libexec/gnubin" >> $GITHUB_PATH
 
-      - name: Setup Theos
-        uses: actions/checkout@v4
-        with:
-          repository: theos/theos
-          ref: master
-          path: theos
-          submodules: recursive
+      - name: Install cyan
+        run: pipx install --force https://github.com/asdfzxcvbn/pyzule-rw/archive/main.zip
 
-      - name: iOS SDK Caching
-        id: SDK
-        uses: actions/cache@v4
-        env:
-          cache-name: iOS-${{ inputs.sdk_version }}-SDK
-        with:
-          path: theos/sdks/
-          key: ${{ env.cache-name }}
-          restore-keys: ${{ env.cache-name }}
-      
-      - name: Download iOS SDK
-        if: steps.SDK.outputs.cache-hit != 'true'
-        run: |
-          git clone --quiet -n --depth=1 --filter=tree:0 https://github.com/aricloverALT/sdks/
-          cd sdks
-          git sparse-checkout set --no-cone iPhoneOS${{ inputs.sdk_version }}.sdk
-          git checkout
-          mv *.sdk $THEOS/sdks
-        env:
-          THEOS: ${{ github.workspace }}/theos
-
-      - name: Setup Theos Jailed
-        uses: actions/checkout@v4
-        with:
-          repository: qnblackcat/theos-jailed
-          ref: master
-          path: theos-jailed
-          submodules: recursive
-
-      - name: Install Theos Jailed
-        run: |
-          ./theos-jailed/install
-        env:
-          THEOS: ${{ github.workspace }}/theos
-
-      - name: Hash TikTok ipa url
-        run: |
-          URL_TikTok="$(jq -r '.inputs.decrypted_TikTok_url' $GITHUB_EVENT_PATH)"
-          echo ::add-mask::$URL_TikTok
-          echo URL_TikTok=$URL_TikTok >> $GITHUB_ENV
-
-      - name: Prepare TikTok iPA
-        id: prepare_TikTok
-        run: |
-          wget "$TikTok_URL" --quiet --no-verbose -O main/TikTok.ipa
-          cd ${{ github.workspace }}/main
-          mv TikTok.ipa TikTok.zip
-          unzip -q TikTok.zip
-          TikTok_version=$(defaults read "$(pwd)/Payload/TikTok.app/Info" CFBundleVersion)
-          echo "==> TikTok v$TikTok_version downloaded!"
-          sed -i '' "9s#.*#TikTok_VERSION = ${TikTok_version}#g" Makefile
-          echo "TikTok_version=${TikTok_version}" >> $GITHUB_OUTPUT
-        env:
-          THEOS: ${{ github.workspace }}/theos
-          TikTok_URL: ${{ inputs.decrypted_TikTok_url }}
-
-      - name: Fix compiling & Build Package
-        id: build_package
-        run: |
-          cd ${{ github.workspace }}/main
-          sed -i '' "22s#.*#BUNDLE_ID = ${{ env.BUNDLE_ID }}#g" Makefile                          # Modify the bundle ID
-          sed -i '' "21s#.*#DISPLAY_NAME = ${{ env.APP_NAME }}#g" Makefile                        # Modify the app name
-          sed -i '' "1s#.*#export TARGET = iphone:clang:${{ inputs.sdk_version }}:14.0#g" Makefile # Modify the SDK version
-          make package THEOS_PACKAGE_FORMAT=zip THEOS_PACKAGE_SCHEME=rootless app=Payload/TikTok.app FINALPACKAGE=1
-          echo "package=$(ls -t packages | head -n1)" >>$GITHUB_OUTPUT
-          echo -e "==> \033[1mSHASUM256: $(shasum -a 256 packages/*.ipa | cut -f1 -d' ')\033[0m"
-          echo -e "==> \033[1mBundle ID: ${{ env.BUNDLE_ID }}\033[0m"
-          
-        env:
-          THEOS: ${{ github.workspace }}/theos
-          BHTikTokPlusPlus_VERSION: ${{ inputs.BHTikTokPlusPlus_version }}
-          BUNDLE_ID: ${{ inputs.bundle_id }}
-          APP_NAME: ${{ inputs.app_name }}
-
-      - name: Upload Artifact
-        if: ${{ inputs.upload_artifact }}
-        uses: actions/upload-artifact@v4.4.3
-        env:
-          BHTikTokPlusPlus_VERSION: ${{ inputs.BHTikTokPlusPlus_version }}
-          TikTok_VERSION: ${{ steps.prepare_TikTok.outputs.TikTok_version }}
-        with:
-          name: BHTikTokPlusPlus_${{ env.TikTok_VERSION }}_${{ env.BHTikTokPlusPlus_VERSION }}
-          path: ${{ github.workspace }}/main/packages/${{ steps.build_package.outputs.package }}
-          if-no-files-found: error
-
-      - name: Create Draft Release
-        if: ${{ inputs.create_release }}
-        id: create_release
-        uses: softprops/action-gh-release@v2.1.0
+      - name: Download BHTikTok++ and Get Versions
+        id: versions
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BHTikTokPlusPlus_VERSION: ${{ inputs.BHTikTokPlusPlus_version }}
-          TikTok_VERSION: ${{ steps.prepare_TikTok.outputs.TikTok_version }}
+        run: |
+          # Download latest BHTikTok++ release
+          api_url="https://api.github.com/repos/raulsaeed/BHTikTokPlusPlus/releases/latest"
+          response=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" "$api_url")
+          bhtiktok_tag=$(echo "$response" | jq -r '.tag_name')
+          deb_url=$(echo "$response" | jq -r '.assets[] | select(.name | endswith(".deb")) | .browser_download_url')
+
+          if [[ "$deb_url" == "null" || -z "$deb_url" ]]; then
+            echo "::error::Failed to get tweak URL from Github API"
+            exit 1
+          fi
+          
+          # Extract TikTok version from IPA URL
+          tiktok_version=$(echo "${{ inputs.ipa_url }}" | grep -o -E '[0-9]+(\.[0-9]+)+' | head -n 1)
+
+          echo "BHTIKTOK_TAG=${bhtiktok_tag}" >> "$GITHUB_OUTPUT"
+          echo "TIKTOK_VERSION=${tiktok_version}" >> "$GITHUB_OUTPUT"
+          
+          echo "Downloading: $deb_url"
+          wget "$deb_url" --no-verbose -O ${{ github.workspace }}/bhtiktok.deb
+
+      - name: Inject tweaks into IPA
+        id: package_info
+        run: |
+          FINAL_IPA_NAME="BHTikTok++_${{ steps.versions.outputs.BHTIKTOK_TAG }}_TikTok_${{ steps.versions.outputs.TIKTOK_VERSION }}.ipa"
+          cyan -i tiktok.ipa -o "${FINAL_IPA_NAME}" -uwef bhtiktok.deb -n "${{ inputs.display_name }}" -b "${{ inputs.bundle_id }}" -s
+          echo "package_name=${FINAL_IPA_NAME}" >> "$GITHUB_OUTPUT"
+          echo "job_id=$(echo -n "${{ github.run_id }}-${{ github.run_attempt }}" | shasum -a 1 | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
+      - name: Strip embedded Swift dylibs
+        run: |
+          unzip -q "${{ steps.package_info.outputs.package_name }}" -d tmp_payload
+          find tmp_payload/Payload/*.app/ -name "libswift*.dylib" -print -delete
+          cd tmp_payload
+          zip -qr ../clean_ipa.ipa Payload
+          cd ..
+          mv clean_ipa.ipa "${{ steps.package_info.outputs.package_name }}"
+
+      - name: Upload and Edit on appdb
+        if: ${{ inputs.upload_to_appdb }}
+        id: upload_step
+        env:
+          APPDB_LINK_TOKEN: ${{ secrets.APPDB_LINK_TOKEN }}
+          PACKAGE_PATH: ${{ github.workspace }}/${{ steps.package_info.outputs.package_name }}
+          JOB_ID: ${{ steps.package_info.outputs.job_id }}
+          BHTIKTOK_TAG: ${{ steps.versions.outputs.BHTIKTOK_TAG }}
+          TIKTOK_VERSION: ${{ steps.versions.outputs.TIKTOK_VERSION }}
+        run: |
+          echo "Step 1: Uploading IPA to appdb..."
+          curl -sS -X POST https://api.dbservices.to/v1.7/add_ipa/ \
+               -F "lt=${APPDB_LINK_TOKEN}" \
+               -F "job_id=${JOB_ID}" \
+               -F "ipa=@${PACKAGE_PATH}" \
+               --fail
+
+          echo "Step 2: Waiting for IPA processing..."
+          for i in {1..20}; do
+            sleep 15
+            STATUS_RESPONSE=$(curl -sS -X POST https://api.dbservices.to/v1.7/get_ipa_analyze_jobs/ -F "lt=${APPDB_LINK_TOKEN}" -F "ids[]=${JOB_ID}")
+            IS_FINISHED=$(echo "$STATUS_RESPONSE" | jq -r '.data[0].is_finished')
+            if [ "$IS_FINISHED" = "1" ]; then
+              echo "Processing finished!"
+              break
+            fi
+            echo "Still processing... Attempt $i of 20."
+            if [ "$i" = "20" ]; then
+              echo "Error: Timeout waiting for IPA processing."
+              exit 1
+            fi
+          done
+          
+          echo "Step 3: Fetching the new IPA ID..."
+          IPA_ID=$(curl -sS -X POST https://api.dbservices.to/v1.7/get_ipas/ -F "lt=${APPDB_LINK_TOKEN}" | jq '(.data | sort_by(.id) | reverse)[0].id')
+          if [ -z "$IPA_ID" ] || [ "$IPA_ID" = "null" ]; then
+            echo "Error: Could not fetch new IPA ID."
+            exit 1
+          fi
+          echo "Found newest IPA ID: ${IPA_ID}"
+          echo "ipa_id=${IPA_ID}" >> "$GITHUB_OUTPUT"
+
+          echo "Step 4: Editing IPA metadata..."
+          APP_NAME="TikTok v${TIKTOK_VERSION} + BHTikTok++ ${BHTIKTOK_TAG}"
+          curl -sS -X POST https://api.dbservices.to/v1.7/edit_ipa_metadata/ \
+            -F "lt=${APPDB_LINK_TOKEN}" \
+            -F "id=${IPA_ID}" \
+            -F "name=${APP_NAME}" \
+            -F "use_default_tos=1" \
+            -F "use_default_privacy_policy=1" \
+            -F "use_default_license=1" \
+            -F "is_18plus=0" \
+            -F "description=Enhanced TikTok with BHTikTok++ injected" \
+            -F "whatsnew=The latest version contains bug fixes and performance improvements." \
+            -F "is_public=1" \
+            -F "source_name=Johnny's library" \
+            -F "developer_name=TikTok" \
+            -F "genre_name=Enhanced Apps" \
+            -F "min_ios_version=15.0" \
+            -F "min_ipados_version=15.0" \
+            --fail
+          echo "Metadata updated successfully!"
+
+      - name: Cleanup Old Versions on appdb
+        if: ${{ inputs.upload_to_appdb && inputs.cleanup_old_versions }}
+        env:
+          APPDB_LINK_TOKEN: ${{ secrets.APPDB_LINK_TOKEN }}
+          NEWEST_IPA_ID: ${{ steps.upload_step.outputs.ipa_id }}
+        run: |
+          echo "Step 5: Cleaning up old IPA versions, keeping ID ${NEWEST_IPA_ID}..."
+          IPAS_RESPONSE=$(curl -sS -X POST https://api.dbservices.to/v1.7/get_ipas/ -F "lt=${APPDB_LINK_TOKEN}")
+          OLD_IPA_IDS=$(echo "$IPAS_RESPONSE" | jq -r --argjson newest_id "$NEWEST_IPA_ID" '(.data | map(select(.name | contains("TikTok"))) | map(select(.id != $newest_id)) | .[].id)')
+          if [ -z "$OLD_IPA_IDS" ]; then
+            echo "No old TikTok versions found to delete."
+          else
+            echo "Found old IPAs to delete with IDs: $OLD_IPA_IDS"
+            for OLD_ID in $OLD_IPA_IDS; do
+              echo "Deleting IPA with ID: $OLD_ID..."
+              curl -sS -X POST https://api.dbservices.to/v1.7/delete_ipa/ \
+                   -F "lt=${APPDB_LINK_TOKEN}" \
+                   -F "id=${OLD_ID}" \
+                   --fail
+              echo "Deleted IPA with ID: $OLD_ID"
+              sleep 2
+            done
+          fi
+          echo "Cleanup finished."
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ env.TikTok_VERSION }}-${{ env.BHTikTokPlusPlus_VERSION }}-(${{ github.run_number }})
-          name: v${{ env.TikTok_VERSION }}-${{ env.BHTikTokPlusPlus_VERSION }}-(${{ github.run_number }})
-          files: main/packages/*.ipa
+          tag_name: bhtiktok-${{ steps.versions.outputs.BHTIKTOK_TAG }}
+          name: BHTikTok++ ${{ steps.versions.outputs.BHTIKTOK_TAG }}
+          files: ${{ steps.package_info.outputs.package_name }}
           draft: true
