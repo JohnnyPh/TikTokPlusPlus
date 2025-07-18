@@ -83,7 +83,8 @@ jobs:
           api_url="https://api.github.com/repos/raulsaeed/BHTikTokPlusPlus/releases/latest"
           response=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" "$api_url")
           bhtiktok_tag=$(echo "$response" | jq -r '.tag_name')
-          deb_url=$(echo "$response" | jq -r '.assets[] | select(.name | endswith(".deb")) | .browser_download_url')
+          # Select only the arm64 deb file to avoid errors
+          deb_url=$(echo "$response" | jq -r '.assets[] | select(.name | endswith("arm64.deb")) | .browser_download_url')
 
           if [[ "$deb_url" == "null" || -z "$deb_url" ]]; then
             echo "::error::Failed to get tweak URL from Github API"
