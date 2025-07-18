@@ -17,7 +17,7 @@ on:
 
       bundle_id:
         description: "BundleID (Optional)"
-        default: "com.ss.iphone.ugc.Ame"
+        default: "com.zhiliaoapp.musically"
         required: true
         type: string
 
