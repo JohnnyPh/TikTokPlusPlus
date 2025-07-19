@@ -20,6 +20,12 @@ on:
         default: "com.zhiliaoapp.musically"
         required: true
         type: string
+      
+      create_release:
+        description: "Create a public GitHub release"
+        default: true
+        required: false
+        type: boolean
 
       upload_to_appdb:
         description: "Upload and Edit Metadata on appdb"
@@ -206,9 +212,10 @@ jobs:
           echo "Cleanup finished."
 
       - name: Create GitHub Release
+        if: ${{ inputs.create_release }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: bhtiktok-${{ steps.versions.outputs.BHTIKTOK_TAG }}
-          name: BHTikTok++ ${{ steps.versions.outputs.BHTIKTOK_TAG }}
+          tag_name: bhtiktok-${{ steps.versions.outputs.BHTIKTOK_TAG }}-${{ steps.versions.outputs.TIKTOK_VERSION }}
+          name: BHTikTok++ ${{ steps.versions.outputs.BHTIKTOK_TAG }} for TikTok v${{ steps.versions.outputs.TIKTOK_VERSION }}
           files: ${{ steps.package_info.outputs.package_name }}
-          draft: true
+          draft: false
