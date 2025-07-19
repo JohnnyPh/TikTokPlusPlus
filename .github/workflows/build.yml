@@ -5,7 +5,7 @@ on:
     inputs:
       ipa_url:
         description: "URL to the decrypted TikTok IPA file"
-        default: "https://www.dropbox.com/scl/fi/nqk5nnbdbovugqex1lep8/com.ss.iphone.ugc.Ame_40.7.0_und3fined.ipa?rlkey=jbwoeds3nf1dk5i1mdz8f8ce9&st=yw6drktz&dl=1"
+        default: "https://www.dropbox.com/scl/fi/nqk5nnbdbovugqex1lep8/com.ss.iphone.ugc.Ame_40.7.0_und3fined.ipa?rlkey=jbwoeds3nf1dk5i1mdz8f8ce9&st=8kn8hhuw&dl=1"
         required: true
         type: string
 
